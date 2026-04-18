@@ -1,0 +1,177 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'background': '#0b1020',
+    'primaryColor': '#e8eefc',
+    'primaryBorderColor': '#9fb7ff',
+    'primaryTextColor': '#0f172a',
+    'secondaryColor': '#e8eefc',
+    'secondaryBorderColor': '#9fb7ff',
+    'secondaryTextColor': '#0f172a',
+    'tertiaryColor': '#dbeafe',
+    'tertiaryBorderColor': '#93c5fd',
+    'tertiaryTextColor': '#0f172a',
+    'lineColor': '#7dd3fc',
+    'fontSize': '18px'
+  }
+}}%%
+flowchart LR
+    A([User starts app]) --> B[Run Streamlit Home.py]
+    B --> C[Home page loads]
+    C --> D[Import face_rec module]
+    D --> E[Configure environment variables]
+    E --> F[Create Redis_DB client]
+    F --> G[Load InsightFace FaceAnalysis model\nfrom insightface_model]
+    G --> H[Prepare recognition pipeline\nand thread lock]
+    H --> I{User selects page}
+
+    subgraph RTP[Real-Time Prediction]
+        direction TB
+        J[Real-Time Prediction page]
+        J1[Read registered embeddings from Redis hash\nFacial_Features_Store]
+        J2{Redis data available\nand valid?}
+        J3[Show error or warning\nand stop page]
+        J4[Build WebRTC config\nSTUN plus optional TURN]
+        J5[/Browser webcam stream/]
+        J6[streamlit-webrtc callback]
+        J7[Convert frame to ndarray]
+        J8[InsightFace detects face\nand computes embedding]
+        J9[Cosine similarity search\nvia Helper_Funcs.ml_search_algorithm]
+        J10{Match above threshold?}
+        J11[Annotate frame with Name and Role]
+        J12[Annotate frame as Unknown]
+        J13[Append attendance log\ninto in-memory buffer]
+        J14{Save interval reached?}
+        J15[Return annotated video frame]
+        J16[Deduplicate names and push log list\nto Redis list attendance:logs]
+        J17{User clicks STOP?}
+        J18([End webcam stream])
+
+        J --> J1 --> J2
+        J2 -- No --> J3
+        J2 -- Yes --> J4 --> J5 --> J6 --> J7 --> J8 --> J9 --> J10
+        J10 -- Yes --> J11 --> J13
+        J10 -- No --> J12 --> J13
+        J13 --> J14
+        J14 -- No --> J15
+        J14 -- Yes --> J16 --> J15
+        J15 --> J17
+        J17 -- No --> J5
+        J17 -- Yes --> J18
+    end
+
+    subgraph REG[Registration]
+        direction TB
+        K[Registration Form page]
+        K1[Initialize SampleStore\nin Streamlit session_state]
+        K2[Create RegistrationForm instance]
+        K3[Load role options from Redis]
+        K4[Build WebRTC config\nSTUN plus optional TURN]
+        K5{Capture mode selected?}
+        K6[Auto-capture callback]
+        K7[Manual snapshot callback]
+        K8[/Browser webcam stream/]
+        K9[InsightFace detects face\nand computes embedding]
+        K10[Store face crop and embedding\nin SampleStore]
+        K11{Collected MAX_SAMPLES?}
+        K12[Continue capture]
+        K13[Enable Save Registration]
+        K14[Average embeddings into one 512-d vector]
+        K15[Write Name@Role -> embedding\ninto Redis hash Facial_Features_Store]
+        K16[Clear sample buffer and refresh UI]
+
+        K --> K1 --> K2 --> K3 --> K4 --> K5
+        K5 -- OnlineStreaming --> K6 --> K8
+        K5 -- Camera --> K7 --> K8
+        K8 --> K9 --> K10 --> K11
+        K11 -- No --> K12 --> K8
+        K11 -- Yes --> K13 --> K14 --> K15 --> K16
+    end
+
+    subgraph REP[Report]
+        direction TB
+        L[Report page]
+        L1[User refreshes registered data or logs]
+        L2{Which report tab?}
+
+        subgraph REPREG[Registered Data]
+            direction TB
+            L3[Read Redis hash\nFacial_Features_Store]
+            L4[Display Name and Role table]
+            L5{Delete selected entry?}
+            L6[Delete Name@Role from Redis hash]
+            L7[Keep current data]
+            L3 --> L4 --> L5
+            L5 -- Yes --> L6
+            L5 -- No --> L7
+        end
+
+        subgraph REPLOG[Logs]
+            direction TB
+            L8[Read Redis list attendance:logs]
+            L9[Parse log strings into dataframe]
+            L10[Filter by selected time range]
+            L11[Display table or JSON]
+            L12{Clear logs?}
+            L13[Delete Redis list attendance:logs]
+            L14[Keep current logs]
+            L8 --> L9 --> L10 --> L11 --> L12
+            L12 -- Yes --> L13
+            L12 -- No --> L14
+        end
+
+        L --> L1 --> L2
+        L2 -- Registered Data --> L3
+        L2 -- Logs --> L8
+    end
+
+    subgraph DATA[Shared Services]
+        direction TB
+        DB1[(Redis Cloud)]
+        M[(InsightFace ONNX models)]
+    end
+
+    I --> J
+    I --> K
+    I --> L
+
+    F --> DB1
+    G --> M
+    J1 -. read .-> DB1
+    J16 -. write logs .-> DB1
+    K3 -. read roles .-> DB1
+    K15 -. write embedding .-> DB1
+    L3 -. read data .-> DB1
+    L6 -. delete data .-> DB1
+    L8 -. read logs .-> DB1
+    L13 -. clear logs .-> DB1
+    J8 -. infer .-> M
+    K9 -. infer .-> M
+
+    classDef main fill:#e0f2fe,stroke:#38bdf8,color:#0f172a,stroke-width:2px
+    classDef realtime fill:#fff1f2,stroke:#fb7185,color:#4c0519,stroke-width:2px
+    classDef registration fill:#f0fdf4,stroke:#22c55e,color:#14532d,stroke-width:2px
+    classDef report fill:#fffbeb,stroke:#f59e0b,color:#78350f,stroke-width:2px
+    classDef shared fill:#e2e8f0,stroke:#64748b,color:#0f172a,stroke-width:2px
+
+    class A,B,C,D,E,F,G,H,I main
+    class J,J1,J2,J3,J4,J5,J6,J7,J8,J9,J10,J11,J12,J13,J14,J15,J16,J17,J18 realtime
+    class K,K1,K2,K3,K4,K5,K6,K7,K8,K9,K10,K11,K12,K13,K14,K15,K16 registration
+    class L,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12,L13,L14 report
+    class DB1,M shared
+
+    style RTP fill:#fff7f7,stroke:#fb7185,stroke-width:3px,color:#4c0519
+    style REG fill:#f7fff9,stroke:#22c55e,stroke-width:3px,color:#14532d
+    style REP fill:#fffdf4,stroke:#f59e0b,stroke-width:3px,color:#78350f
+    style REPREG fill:#fffdf4,stroke:#f59e0b,stroke-width:2px,color:#78350f
+    style REPLOG fill:#fffdf4,stroke:#f59e0b,stroke-width:2px,color:#78350f
+    style DATA fill:#f8fafc,stroke:#64748b,stroke-width:3px,color:#0f172a
+
+    linkStyle default stroke:#38bdf8,stroke-width:5px
+    linkStyle 10,20 stroke:#fb7185,stroke-width:5px
+    linkStyle 11,18,24 stroke:#22c55e,stroke-width:5px
+    linkStyle 23,27,28 stroke:#f59e0b,stroke-width:5px
+    linkStyle 34,43 stroke:#22c55e,stroke-width:5px
+    linkStyle 36,41 stroke:#f59e0b,stroke-width:5px
+    linkStyle 49,55,59 stroke:#22c55e,stroke-width:5px
+    linkStyle 50,56,60 stroke:#f59e0b,stroke-width:5px
