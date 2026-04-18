@@ -311,4 +311,151 @@ sslKeyFile = ".ssl/key.pem"
 | Circular import error | Ensure `helper/helper_funcs.py` uses lazy imports for `face_rec` (inside functions, not at top) |
 =======
 # attendance-sys-face-reg-app
+---
+
+
+
+## AWS EC2 Deployment & Troubleshooting Guide
+### 1. Launching the EC2 Instance
+- **OS:** Choose **Ubuntu 24.04 LTS** (recommended for compatibility)
+- **Instance Type:** Start with `t3.medium` (2 vCPU, 4GB RAM) or higher for real-time face recognition. `t3.micro` is not sufficient.
+- **Storage:** Set root volume to at least **30GB** (default 8GB is too small for models and dependencies).
+- **Elastic IP:** Allocate and associate an Elastic IP for a static public address.
+- **Key Pair:** Download and keep your SSH key safe (e.g., `my-ec2-keypair.pem`).
+
+### 2. Security Group (Firewall) Settings
+Add these **inbound rules**:
+| Type         | Protocol | Port(s)         | Source      |
+|--------------|----------|-----------------|-------------|
+| Custom TCP   | TCP      | 8501            | 0.0.0.0/0   |
+| Custom TCP   | TCP      | 3478            | 0.0.0.0/0   |
+| Custom UDP   | UDP      | 3478            | 0.0.0.0/0   |
+| Custom UDP   | UDP      | 49152-49252     | 0.0.0.0/0   |
+
+**Tip:** Restrict source to your company IP range for production.
+
+### 3. Initial Server Setup
+SSH into your instance:
+```bash
+ssh -i /path/to/my-ec2-keypair.pem ubuntu@<Elastic-IP>
+```
+
+Update and install essentials:
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3.11 python3.11-venv python3.11-dev build-essential git
+sudo apt install -y libgl1 libglib2.0-0
+```
+
+#### (Optional) Apache/Nginx Reverse Proxy
+For most Streamlit-only deployments, **not required**. If you want to serve multiple apps or use a custom domain, install Apache or Nginx and set up a reverse proxy.
+
+### 4. Clone Your Repo & Prepare
+```bash
+git clone <your-repo-url>
+cd attendance-sys-face-reg-app
+```
+
+If you see `readonly` errors when editing files:
+```bash
+sudo chown -R $USER:$USER /var/www/html/attendance-sys-face-reg-app
+```
+
+### 5. Fix Windows/Linux Package Conflicts
+If you see errors with `tensorflow-intel` or `pyreadline3` in `requirements.txt`:
+```bash
+# Remove Windows-only packages and relax version constraints
+sed -i 's/tensorflow-intel/tensorflow/g' requirements.txt
+sed -i '/pyreadline3/d' requirements.txt
+sed -i 's/==/>=/g' requirements.txt
+```
+
+### 6. Python Environment & Dependencies
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install tensorflow==2.15.0
+pip install insightface
+pip install Cython numpy
+```
+
+### 7. Download InsightFace Models
+If not present in `insightface_model/models/buffalo_l/`, auto-download:
+```bash
+python3 -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l', root='insightface_model')"
+```
+
+### 8. Configure Redis
+Set your Redis Cloud credentials as environment variables before running the app:
+```bash
+export REDIS_HOST='your-redis-host'
+export REDIS_PORT=17847
+export REDIS_PASSWORD='your-redis-password'
+```
+
+### 9. Setup and Run coturn (TURN server)
+```bash
+sudo apt install -y coturn
+sudo tee /etc/turnserver.conf > /dev/null << 'EOF'
+listening-port=3478
+listening-ip=0.0.0.0
+external-ip=<Elastic-IP>/<Private-IP>
+relay-ip=<Private-IP>
+min-port=49152
+max-port=49252
+fingerprint
+lt-cred-mech
+user=myuser:mypassword
+realm=<Elastic-IP>
+verbose
+no-tls
+no-dtls
+no-cli
+EOF
+sudo systemctl restart coturn
+```
+Set env vars for Streamlit:
+```bash
+export TURN_URLS="turn:<Elastic-IP>:3478"
+export TURN_USERNAME="myuser"
+export TURN_CREDENTIAL="mypassword"
+```
+
+### 10. Add Swap (if needed)
+If you see `Killed` or OOM errors:
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### 11. Run the App with HTTPS
+Generate a self-signed cert if needed:
+```bash
+mkdir -p ~/.ssl
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout ~/.ssl/key.pem -out ~/.ssl/cert.pem \
+  -subj "/CN=localhost"
+```
+Run Streamlit:
+```bash
+streamlit run Home.py --server.address 0.0.0.0 \
+  --server.sslCertFile ~/.ssl/cert.pem \
+  --server.sslKeyFile ~/.ssl/key.pem
+```
+
+### 12. Troubleshooting Checklist
+- **Cannot install package:** Check for Windows-only packages in `requirements.txt` and remove/replace as above.
+- **Cannot edit files:** Use `sudo chown -R $USER:$USER <project-dir>`.
+- **Webcam not working:** Ensure HTTPS, correct TURN config, and all security group ports are open.
+- **No bounding box/name:** If video is real-time but no overlays, you are seeing local feed (TURN not working). If video is frozen but overlays appear, upgrade instance type.
+- **Face detection slow/frozen:** Use at least `t3.medium` or higher.
+- **Redis errors:** Double-check credentials and network access.
+- **coturn errors:** Stop the service before running manually for logs: `sudo systemctl stop coturn; sudo turnserver -c /etc/turnserver.conf -v`
+
+---
 
