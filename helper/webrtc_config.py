@@ -73,5 +73,4 @@ def get_rtc_configuration():
                 "credential": str(turn_credential),
             }
         )
-
     return {"iceServers": ice_servers}
